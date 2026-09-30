@@ -27,6 +27,13 @@
   .compteur { margin:10px 0; font-weight:600; }
   #msg { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#333; color:#fff; padding:10px 16px; border-radius:6px; display:none; }
   .vide { color:#777; font-style:italic; padding:6px 4px; }
+  textarea { width:100%; min-height:180px; padding:10px; font-size:12pt; font-family:inherit; border:1px solid var(--bord); border-radius:6px; }
+  .ing { display:flex; align-items:center; gap:8px; padding:8px 4px; border-bottom:1px solid var(--gris); flex-wrap:wrap; }
+  .ing input[type=checkbox] { width:22px; height:22px; accent-color:var(--vert); }
+  .ing .nomIng { flex:1; min-width:120px; }
+  .ing select { flex:0 1 200px; min-width:140px; padding:6px; }
+  .deja { color:var(--vert); font-size:10pt; font-style:italic; }
+  .attente { padding:12px 4px; color:#555; }
 </style>
 </head>
 <body>
@@ -34,6 +41,7 @@
 <div class="onglets">
   <button id="btnSemaine" class="actif" onclick="onglet('semaine')">Ma semaine</button>
   <button id="btnProduits" onclick="onglet('produits')">Mes produits</button>
+  <button id="btnRecette" onclick="onglet('recette')">Recette</button>
 </div>
 <main>
   <section id="semaine" class="panneau actif">
@@ -56,12 +64,24 @@
     </div>
     <div id="listeProduits"></div>
   </section>
+  <section id="recette" class="panneau">
+    <p>Colle le texte d'une recette, puis clique sur <b>Extraire les ingrédients</b>.</p>
+    <textarea id="texteRecette" placeholder="Colle ta recette ici…"></textarea>
+    <div class="ligne">
+      <button class="action" id="btnExtraire" onclick="extraire()">Extraire les ingrédients</button>
+    </div>
+    <div id="resultatRecette"></div>
+    <div class="ligne" id="zoneAjout" style="display:none">
+      <button class="action" onclick="ajouterRecette()">Ajouter à ma semaine</button>
+    </div>
+  </section>
 </main>
 <div id="msg"></div>
 <script>
 // ====== À REMPLIR (2 valeurs) ======
 const SUPABASE_URL = "https://dwkalolzdicnrjaqruij.supabase.co";
 const SUPABASE_KEY = "sb_publishable_QNCe2A2C5Chv8Uy-edokzg_dvCQjyOb";
+const WEBHOOK_RECETTE = "https://n8n.hebreu-zen.cloud/webhook/courses-recette";
 // ===================================
 
 const H = { apikey: SUPABASE_KEY, "Content-Type": "application/json" };
@@ -77,7 +97,7 @@ async function api(chemin, options = {}) {
 function message(t) { const m = document.getElementById("msg"); m.textContent = t; m.style.display = "block"; setTimeout(() => m.style.display = "none", 2500); }
 
 function onglet(nom) {
-  ["semaine", "produits"].forEach(n => {
+  ["semaine", "produits", "recette"].forEach(n => {
     document.getElementById(n).classList.toggle("actif", n === nom);
     document.getElementById("btn" + n.charAt(0).toUpperCase() + n.slice(1)).classList.toggle("actif", n === nom);
   });
@@ -146,6 +166,73 @@ async function coursesFaites() {
   produits.forEach(p => p.manque = false);
   afficher();
   message("Liste remise à zéro");
+}
+
+// ===== Recette =====
+let ingredients = [];
+
+function normaliser(t) {
+  return t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim().replace(/s$/, "");
+}
+
+async function extraire() {
+  const texte = document.getElementById("texteRecette").value.trim();
+  const zone = document.getElementById("resultatRecette");
+  const bouton = document.getElementById("btnExtraire");
+  if (!texte) { message("Colle d'abord une recette"); return; }
+  bouton.disabled = true;
+  document.getElementById("zoneAjout").style.display = "none";
+  zone.innerHTML = '<div class="attente">⏳ Analyse de la recette en cours (10 à 30 secondes)…</div>';
+  try {
+    const r = await fetch(WEBHOOK_RECETTE, { method: "POST", body: new URLSearchParams({ recette: texte }) });
+    const data = await r.json();
+    const liste = Array.isArray(data.ingredients) ? data.ingredients : [];
+    if (!liste.length) { zone.innerHTML = '<div class="attente">Aucun ingrédient trouvé. Réessaie dans un instant.</div>'; return; }
+    ingredients = liste.map(i => {
+      const existant = produits.find(p => normaliser(p.nom) === normaliser(i.nom || ""));
+      const rayon = rayons.find(r => r.nom === i.rayon) || rayons.find(r => r.nom === "Divers");
+      return { nom: i.nom, existant, rayon_id: existant ? existant.rayon_id : rayon.id };
+    });
+    afficherIngredients();
+  } catch (e) {
+    zone.innerHTML = '<div class="attente">❌ Le service ne répond pas. Réessaie plus tard.</div>';
+  } finally {
+    bouton.disabled = false;
+  }
+}
+
+function afficherIngredients() {
+  const opts = id => rayons.map(r => `<option value="${r.id}" ${r.id === id ? "selected" : ""}>${r.nom}</option>`).join("");
+  let h = `<h2>Ingrédients trouvés (${ingredients.length})</h2><p>Décoche ce que tu as déjà.</p>`;
+  ingredients.forEach((i, k) => {
+    h += `<div class="ing"><input type="checkbox" id="ing${k}" checked><label class="nomIng" for="ing${k}">${echap(i.nom)}</label>`;
+    h += i.existant ? `<span class="deja">déjà dans tes produits</span>` : `<select id="ray${k}">${opts(i.rayon_id)}</select>`;
+    h += `</div>`;
+  });
+  document.getElementById("resultatRecette").innerHTML = h;
+  document.getElementById("zoneAjout").style.display = "flex";
+}
+
+async function ajouterRecette() {
+  let n = 0;
+  for (let k = 0; k < ingredients.length; k++) {
+    if (!document.getElementById("ing" + k).checked) continue;
+    const i = ingredients[k];
+    if (i.existant) {
+      if (!i.existant.manque) await api("produits?id=eq." + i.existant.id, { method: "PATCH", body: JSON.stringify({ manque: true }) });
+    } else {
+      const rayon = Number(document.getElementById("ray" + k).value);
+      await api("produits", { method: "POST", body: JSON.stringify({ nom: i.nom, rayon_id: rayon, manque: true }) });
+    }
+    n++;
+  }
+  ingredients = [];
+  document.getElementById("resultatRecette").innerHTML = "";
+  document.getElementById("zoneAjout").style.display = "none";
+  document.getElementById("texteRecette").value = "";
+  await charger();
+  onglet("semaine");
+  message(n + " ingrédient(s) ajouté(s) à ta semaine");
 }
 
 charger();

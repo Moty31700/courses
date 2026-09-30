@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mes courses</title>
+<style>
+  :root { --vert:#2e7d4f; --gris:#f3f4f2; --bord:#d9ddd6; --texte:#222; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system, "Segoe UI", Roboto, sans-serif; font-size:12pt; color:var(--texte); background:#fff; }
+  header { background:var(--vert); color:#fff; padding:14px 16px; font-size:16pt; font-weight:600; }
+  .onglets { display:flex; border-bottom:1px solid var(--bord); }
+  .onglets button { flex:1; padding:12px; font-size:12pt; border:none; background:var(--gris); cursor:pointer; }
+  .onglets button.actif { background:#fff; font-weight:600; border-bottom:3px solid var(--vert); }
+  main { padding:12px 16px 80px; max-width:640px; margin:0 auto; }
+  .panneau { display:none; } .panneau.actif { display:block; }
+  h2 { font-size:12pt; margin:18px 0 6px; padding:6px 10px; background:var(--gris); border-left:4px solid var(--vert); }
+  label.produit { display:flex; align-items:center; gap:10px; padding:9px 4px; border-bottom:1px solid var(--gris); cursor:pointer; }
+  label.produit input { width:22px; height:22px; accent-color:var(--vert); }
+  label.produit.coche span { font-weight:600; color:var(--vert); }
+  .ligne { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; }
+  input[type=text], select { flex:1; min-width:140px; padding:10px; font-size:12pt; border:1px solid var(--bord); border-radius:6px; }
+  button.action { padding:10px 14px; font-size:12pt; border:none; border-radius:6px; background:var(--vert); color:#fff; cursor:pointer; }
+  button.secondaire { background:#fff; color:var(--vert); border:1px solid var(--vert); }
+  .item { display:flex; justify-content:space-between; align-items:center; padding:8px 4px; border-bottom:1px solid var(--gris); }
+  .item button { border:none; background:none; color:#b3261e; font-size:12pt; cursor:pointer; }
+  .compteur { margin:10px 0; font-weight:600; }
+  #msg { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#333; color:#fff; padding:10px 16px; border-radius:6px; display:none; }
+  .vide { color:#777; font-style:italic; padding:6px 4px; }
+</style>
+</head>
+<body>
+<header>🛒 Mes courses</header>
+<div class="onglets">
+  <button id="btnSemaine" class="actif" onclick="onglet('semaine')">Ma semaine</button>
+  <button id="btnProduits" onclick="onglet('produits')">Mes produits</button>
+</div>
+<main>
+  <section id="semaine" class="panneau actif">
+    <div class="compteur" id="compteur"></div>
+    <div class="ligne">
+      <input type="text" id="exceptNom" placeholder="Article exceptionnel…">
+      <select id="exceptRayon"></select>
+      <button class="action" onclick="ajouter(true)">Ajouter</button>
+    </div>
+    <div id="listeSemaine"></div>
+    <div class="ligne" style="margin-top:24px">
+      <button class="action secondaire" onclick="coursesFaites()">✔ Courses faites (tout décocher)</button>
+    </div>
+  </section>
+  <section id="produits" class="panneau">
+    <div class="ligne">
+      <input type="text" id="nouveauNom" placeholder="Nom du produit">
+      <select id="nouveauRayon"></select>
+      <button class="action" onclick="ajouter(false)">Ajouter</button>
+    </div>
+    <div id="listeProduits"></div>
+  </section>
+</main>
+<div id="msg"></div>
+<script>
+// ====== À REMPLIR (2 valeurs) ======
+const SUPABASE_URL = "https://dwkalolzdicnrjaqruij.supabase.co";
+const SUPABASE_KEY = "sb_publishable_QNCe2A2C5Chv8Uy-edokzg_dvCQjyOb";
+// ===================================
+
+const H = { apikey: SUPABASE_KEY, "Content-Type": "application/json" };
+if (SUPABASE_KEY.startsWith("eyJ")) H.Authorization = "Bearer " + SUPABASE_KEY;
+let rayons = [], produits = [];
+
+async function api(chemin, options = {}) {
+  const r = await fetch(SUPABASE_URL + "/rest/v1/" + chemin, { ...options, headers: { ...H, ...(options.headers || {}) } });
+  if (!r.ok) { const t = await r.text(); message("Erreur : " + t); throw new Error(t); }
+  return r.status === 204 ? null : r.json();
+}
+
+function message(t) { const m = document.getElementById("msg"); m.textContent = t; m.style.display = "block"; setTimeout(() => m.style.display = "none", 2500); }
+
+function onglet(nom) {
+  ["semaine", "produits"].forEach(n => {
+    document.getElementById(n).classList.toggle("actif", n === nom);
+    document.getElementById("btn" + n.charAt(0).toUpperCase() + n.slice(1)).classList.toggle("actif", n === nom);
+  });
+}
+
+async function charger() {
+  rayons = await api("rayons?select=*&order=ordre");
+  produits = await api("produits?select=*&order=nom");
+  const opts = rayons.map(r => `<option value="${r.id}">${r.nom}</option>`).join("");
+  document.getElementById("nouveauRayon").innerHTML = opts;
+  document.getElementById("exceptRayon").innerHTML = opts;
+  afficher();
+}
+
+function echap(t) { return t.replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+
+function afficher() {
+  let s = "", p = "";
+  rayons.forEach(r => {
+    const liste = produits.filter(x => x.rayon_id === r.id);
+    s += `<h2>${r.nom}</h2>`;
+    p += `<h2>${r.nom}</h2>`;
+    if (!liste.length) { s += `<div class="vide">—</div>`; p += `<div class="vide">Aucun produit</div>`; return; }
+    liste.forEach(x => {
+      s += `<label class="produit ${x.manque ? "coche" : ""}"><input type="checkbox" ${x.manque ? "checked" : ""} onchange="basculer(${x.id}, this.checked)"><span>${echap(x.nom)}</span></label>`;
+      p += `<div class="item"><span>${echap(x.nom)}</span><button onclick="supprimer(${x.id})">🗑</button></div>`;
+    });
+  });
+  document.getElementById("listeSemaine").innerHTML = s;
+  document.getElementById("listeProduits").innerHTML = p;
+  const n = produits.filter(x => x.manque).length;
+  document.getElementById("compteur").textContent = n ? `${n} produit(s) à acheter` : "Rien à acheter pour l'instant";
+}
+
+async function basculer(id, etat) {
+  await api("produits?id=eq." + id, { method: "PATCH", body: JSON.stringify({ manque: etat }) });
+  produits.find(x => x.id === id).manque = etat;
+  afficher();
+}
+
+async function ajouter(exceptionnel) {
+  const champ = document.getElementById(exceptionnel ? "exceptNom" : "nouveauNom");
+  const rayon = document.getElementById(exceptionnel ? "exceptRayon" : "nouveauRayon").value;
+  const nom = champ.value.trim();
+  if (!nom) return;
+  const res = await api("produits", { method: "POST", headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ nom, rayon_id: Number(rayon), manque: exceptionnel }) });
+  produits.push(res[0]);
+  produits.sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+  champ.value = "";
+  afficher();
+  message("Ajouté : " + nom);
+}
+
+async function supprimer(id) {
+  const x = produits.find(p => p.id === id);
+  if (!confirm("Supprimer « " + x.nom + " » ?")) return;
+  await api("produits?id=eq." + id, { method: "DELETE" });
+  produits = produits.filter(p => p.id !== id);
+  afficher();
+}
+
+async function coursesFaites() {
+  if (!confirm("Tout décocher ? (courses faites)")) return;
+  await api("produits?manque=eq.true", { method: "PATCH", body: JSON.stringify({ manque: false }) });
+  produits.forEach(p => p.manque = false);
+  afficher();
+  message("Liste remise à zéro");
+}
+
+charger();
+</script>
+</body>
+</html>

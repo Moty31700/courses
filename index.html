@@ -34,6 +34,11 @@
   .ing select { flex:0 1 200px; min-width:140px; padding:6px; }
   .deja { color:var(--vert); font-size:10pt; font-style:italic; }
   .attente { padding:12px 4px; color:#555; }
+  .rec { display:flex; justify-content:space-between; align-items:center; padding:6px 4px; border-bottom:1px solid var(--gris); }
+  .rec button.nomRec { flex:1; text-align:left; background:none; border:none; font-size:12pt; padding:6px 0; cursor:pointer; color:var(--texte); }
+  .rec button.nomRec.ouverte { font-weight:600; color:var(--vert); }
+  .rec button.suppr { border:none; background:none; color:#b3261e; font-size:12pt; cursor:pointer; }
+  .detail { margin:6px 0 16px; padding:8px 10px; border:1px solid var(--bord); border-radius:6px; }
 </style>
 </head>
 <body>
@@ -65,7 +70,14 @@
     <div id="listeProduits"></div>
   </section>
   <section id="recette" class="panneau">
-    <p>Colle le texte d'une recette, puis clique sur <b>Extraire les ingrédients</b>.</p>
+    <h2>Mes recettes</h2>
+    <div id="listeRecettes"></div>
+    <div id="detailRecette"></div>
+
+    <h2>Nouvelle recette</h2>
+    <div class="ligne">
+      <input type="text" id="nomRecette" placeholder="Nom de la recette (pour la retrouver plus tard)">
+    </div>
     <textarea id="texteRecette" placeholder="Colle ta recette ici…"></textarea>
     <div class="ligne">
       <button class="action" id="btnExtraire" onclick="extraire()">Extraire les ingrédients</button>
@@ -86,7 +98,7 @@ const WEBHOOK_RECETTE = "https://n8n.hebreu-zen.cloud/webhook/courses-recette";
 
 const H = { apikey: SUPABASE_KEY, "Content-Type": "application/json" };
 if (SUPABASE_KEY.startsWith("eyJ")) H.Authorization = "Bearer " + SUPABASE_KEY;
-let rayons = [], produits = [];
+let rayons = [], produits = [], recettes = [], recetteOuverte = null;
 
 async function api(chemin, options = {}) {
   const r = await fetch(SUPABASE_URL + "/rest/v1/" + chemin, { ...options, headers: { ...H, ...(options.headers || {}) } });
@@ -111,6 +123,7 @@ async function charger() {
   document.getElementById("nouveauRayon").innerHTML = opts;
   document.getElementById("exceptRayon").innerHTML = opts;
   afficher();
+  await chargerRecettes();
 }
 
 function echap(t) { return t.replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
@@ -215,25 +228,105 @@ function afficherIngredients() {
 }
 
 async function ajouterRecette() {
+  const nomRecette = document.getElementById("nomRecette").value.trim();
+  const ids = [];
   let n = 0;
   for (let k = 0; k < ingredients.length; k++) {
-    if (!document.getElementById("ing" + k).checked) continue;
+    const coche = document.getElementById("ing" + k).checked;
     const i = ingredients[k];
+    let id;
     if (i.existant) {
-      if (!i.existant.manque) await api("produits?id=eq." + i.existant.id, { method: "PATCH", body: JSON.stringify({ manque: true }) });
+      id = i.existant.id;
+      if (coche && !i.existant.manque) await api("produits?id=eq." + id, { method: "PATCH", body: JSON.stringify({ manque: true }) });
     } else {
+      // Nouveau produit : créé dans tous les cas pour que la recette le retienne ; coché = à acheter
       const rayon = Number(document.getElementById("ray" + k).value);
-      await api("produits", { method: "POST", body: JSON.stringify({ nom: i.nom, rayon_id: rayon, manque: true }) });
+      const res = await api("produits", { method: "POST", headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ nom: i.nom, rayon_id: rayon, manque: coche }) });
+      id = res[0].id;
     }
-    n++;
+    ids.push(id);
+    if (coche) n++;
   }
+  if (nomRecette) await enregistrerRecette(nomRecette, ids);
   ingredients = [];
   document.getElementById("resultatRecette").innerHTML = "";
   document.getElementById("zoneAjout").style.display = "none";
   document.getElementById("texteRecette").value = "";
+  document.getElementById("nomRecette").value = "";
   await charger();
   onglet("semaine");
-  message(n + " ingrédient(s) ajouté(s) à ta semaine");
+  message(n + " ingrédient(s) ajouté(s) à ta semaine" + (nomRecette ? " — recette enregistrée" : ""));
+}
+
+// ===== Recettes enregistrées =====
+async function chargerRecettes() {
+  try {
+    recettes = await api("recettes?select=id,nom,recette_produits(produit_id)&order=nom");
+  } catch (e) { recettes = []; }
+  afficherRecettes();
+}
+
+async function enregistrerRecette(nom, ids) {
+  const deja = recettes.find(r => normaliser(r.nom) === normaliser(nom));
+  let recetteId;
+  if (deja) {
+    recetteId = deja.id;
+    await api("recette_produits?recette_id=eq." + recetteId, { method: "DELETE" });
+  } else {
+    const res = await api("recettes", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ nom }) });
+    recetteId = res[0].id;
+  }
+  const uniques = [...new Set(ids)];
+  await api("recette_produits", { method: "POST", body: JSON.stringify(uniques.map(p => ({ recette_id: recetteId, produit_id: p }))) });
+}
+
+function afficherRecettes() {
+  const zone = document.getElementById("listeRecettes");
+  if (!recettes.length) { zone.innerHTML = '<div class="vide">Aucune recette enregistrée pour l\'instant.</div>'; document.getElementById("detailRecette").innerHTML = ""; return; }
+  zone.innerHTML = recettes.map(r =>
+    `<div class="rec"><button class="nomRec ${recetteOuverte === r.id ? "ouverte" : ""}" onclick="ouvrirRecette(${r.id})">📖 ${echap(r.nom)}</button>` +
+    `<button class="suppr" onclick="supprimerRecette(${r.id})">🗑</button></div>`
+  ).join("");
+  afficherDetail();
+}
+
+function ouvrirRecette(id) {
+  recetteOuverte = recetteOuverte === id ? null : id;
+  afficherRecettes();
+}
+
+function afficherDetail() {
+  const zone = document.getElementById("detailRecette");
+  const r = recettes.find(x => x.id === recetteOuverte);
+  if (!r) { zone.innerHTML = ""; return; }
+  const liste = r.recette_produits.map(l => produits.find(p => p.id === l.produit_id)).filter(Boolean)
+    .sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+  let h = `<div class="detail"><b>${echap(r.nom)}</b> — ${liste.length} ingrédient(s). Décoche ce que tu as déjà.`;
+  liste.forEach(p => {
+    h += `<div class="ing"><input type="checkbox" class="ingRec" value="${p.id}" id="rp${p.id}" checked><label class="nomIng" for="rp${p.id}">${echap(p.nom)}</label>` +
+         (p.manque ? `<span class="deja">déjà dans ta semaine</span>` : "") + `</div>`;
+  });
+  h += `<div class="ligne"><button class="action" onclick="ajouterRecetteEnregistree()">Ajouter à ma semaine</button></div></div>`;
+  zone.innerHTML = h;
+}
+
+async function ajouterRecetteEnregistree() {
+  const ids = [...document.querySelectorAll(".ingRec:checked")].map(c => c.value);
+  if (!ids.length) { message("Aucun ingrédient coché"); return; }
+  await api("produits?id=in.(" + ids.join(",") + ")", { method: "PATCH", body: JSON.stringify({ manque: true }) });
+  recetteOuverte = null;
+  await charger();
+  onglet("semaine");
+  message(ids.length + " ingrédient(s) ajouté(s) à ta semaine");
+}
+
+async function supprimerRecette(id) {
+  const r = recettes.find(x => x.id === id);
+  if (!confirm("Supprimer la recette « " + r.nom + " » ? (tes produits restent)")) return;
+  await api("recettes?id=eq." + id, { method: "DELETE" });
+  if (recetteOuverte === id) recetteOuverte = null;
+  await chargerRecettes();
 }
 
 charger();

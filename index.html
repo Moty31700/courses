@@ -91,7 +91,8 @@ let rayons = [], produits = [];
 async function api(chemin, options = {}) {
   const r = await fetch(SUPABASE_URL + "/rest/v1/" + chemin, { ...options, headers: { ...H, ...(options.headers || {}) } });
   if (!r.ok) { const t = await r.text(); message("Erreur : " + t); throw new Error(t); }
-  return r.status === 204 ? null : r.json();
+  const texte = await r.text();
+  return texte ? JSON.parse(texte) : null;
 }
 
 function message(t) { const m = document.getElementById("msg"); m.textContent = t; m.style.display = "block"; setTimeout(() => m.style.display = "none", 2500); }
